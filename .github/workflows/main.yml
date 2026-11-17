@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -26,15 +26,16 @@ jobs:
           gradle-version: '8.7'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK Packages
         run: |
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
-          yes | sdkmanager --licenses
 
-      - name: Build ONESERVE POINT APK
+      - name: Build APK
         run: gradle --no-daemon assembleDebug
 
       - name: Upload APK
