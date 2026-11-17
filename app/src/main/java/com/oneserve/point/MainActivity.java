@@ -2,7 +2,6 @@ package com.oneserve.point;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -15,19 +14,18 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
-import androidx.annotation.Nullable;
-
 public class MainActivity extends Activity {
-    private static final int FILE_CHOOSER_REQUEST = 1001;
-    private static final int MEDIA_PERMISSION_REQUEST = 1002;
 
     private WebView webView;
-    private ValueCallback<Uri[]> filePathCallback;
+    private ValueCallback<Uri[]> uploadCallback;
+
+    private static final int FILE_REQUEST = 1001;
+    private static final int PERMISSION_REQUEST = 1002;
+
     private boolean waitingForPermission = false;
-    private boolean pendingImageSelection = false;
 
     @Override
-    protected void onCreate(@Nullable Bundle savedInstanceState) {
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
@@ -38,10 +36,9 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
-        settings.setJavaScriptCanOpenWindowsAutomatically(false);
-        settings.setSupportMultipleWindows(false);
 
         webView.setWebViewClient(new WebViewClient());
+
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(
@@ -49,21 +46,18 @@ public class MainActivity extends Activity {
                     ValueCallback<Uri[]> callback,
                     FileChooserParams params) {
 
-                if (filePathCallback != null) {
-                    filePathCallback.onReceiveValue(null);
+                if (uploadCallback != null) {
+                    uploadCallback.onReceiveValue(null);
                 }
-                filePathCallback = callback;
 
-                String[] acceptTypes = params.getAcceptTypes();
-                pendingImageSelection = acceptsImages(acceptTypes);
+                uploadCallback = callback;
 
-                // Android 13+ photo permission is requested for image uploads.
-                // PDF/document selection uses Android's scoped system picker.
-                if (pendingImageSelection && needsImagePermission()) {
+                if (requiresImagePermission(params)) {
                     requestImagePermission();
                 } else {
                     openDocumentPicker(params);
                 }
+
                 return true;
             }
         });
@@ -71,113 +65,149 @@ public class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/index.html");
     }
 
-    private boolean acceptsImages(String[] types) {
-        if (types == null || types.length == 0) return true;
-        for (String type : types) {
-            if (type != null && (type.contains("image") || type.equals("*/*"))) {
-                return true;
+    private boolean requiresImagePermission(FileChooserParams params) {
+        if (params == null || Build.VERSION.SDK_INT < 23) {
+            return false;
+        }
+
+        boolean acceptsImage = false;
+        String[] types = params.getAcceptTypes();
+
+        if (types != null) {
+            for (String type : types) {
+                if (type != null &&
+                        (type.contains("image") || type.equals("*/*"))) {
+                    acceptsImage = true;
+                    break;
+                }
             }
         }
-        return false;
-    }
 
-    private boolean needsImagePermission() {
+        if (!acceptsImage) return false;
+
         if (Build.VERSION.SDK_INT >= 34) {
-            return checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES)
+            return checkSelfPermission(
+                    Manifest.permission.READ_MEDIA_IMAGES)
                     != PackageManager.PERMISSION_GRANTED
-                    && checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                    && checkSelfPermission(
+                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
                     != PackageManager.PERMISSION_GRANTED;
+
         } else if (Build.VERSION.SDK_INT >= 33) {
-            return checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES)
+            return checkSelfPermission(
+                    Manifest.permission.READ_MEDIA_IMAGES)
                     != PackageManager.PERMISSION_GRANTED;
-        } else if (Build.VERSION.SDK_INT <= 32 && Build.VERSION.SDK_INT >= 23) {
-            return checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+
+        } else {
+            return checkSelfPermission(
+                    Manifest.permission.READ_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED;
         }
-        return false;
     }
 
     private void requestImagePermission() {
         waitingForPermission = true;
+
         if (Build.VERSION.SDK_INT >= 34) {
-            requestPermissions(new String[] {
+            requestPermissions(new String[]{
                     Manifest.permission.READ_MEDIA_IMAGES,
                     Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            }, MEDIA_PERMISSION_REQUEST);
+            }, PERMISSION_REQUEST);
+
         } else if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(new String[] {
+            requestPermissions(new String[]{
                     Manifest.permission.READ_MEDIA_IMAGES
-            }, MEDIA_PERMISSION_REQUEST);
+            }, PERMISSION_REQUEST);
+
         } else {
-            requestPermissions(new String[] {
+            requestPermissions(new String[]{
                     Manifest.permission.READ_EXTERNAL_STORAGE
-            }, MEDIA_PERMISSION_REQUEST);
+            }, PERMISSION_REQUEST);
         }
     }
 
-    private void openDocumentPicker(WebChromeClient.FileChooserParams params) {
+    private void openDocumentPicker(FileChooserParams params) {
         try {
-            Intent intent;
-            if (params != null && params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
-                intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("*/*");
-                intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                        new String[] {"application/pdf", "image/*"});
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-            } else {
-                intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("*/*");
-                intent.putExtra(Intent.EXTRA_MIME_TYPES,
-                        new String[] {"application/pdf", "image/jpeg", "image/png", "image/*"});
-            }
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivityForResult(intent, FILE_CHOOSER_REQUEST);
-        } catch (ActivityNotFoundException e) {
-            finishFileChooser(null);
-            Toast.makeText(this, "File manager app not available", Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            finishFileChooser(null);
-            Toast.makeText(this, "Unable to open documents", Toast.LENGTH_LONG).show();
-        }
-    }
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
 
-    private void finishFileChooser(@Nullable Uri[] results) {
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(results);
-            filePathCallback = null;
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                    "application/pdf",
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp",
+                    "image/*"
+            });
+
+            if (params != null &&
+                    params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            }
+
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            startActivityForResult(intent, FILE_REQUEST);
+
+        } catch (Exception e) {
+            finishUpload(null);
+            Toast.makeText(this,
+                    "Unable to open documents",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == MEDIA_PERMISSION_REQUEST) {
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults) {
+
+        super.onRequestPermissionsResult(
+                requestCode, permissions, grantResults);
+
+        if (requestCode == PERMISSION_REQUEST && waitingForPermission) {
             waitingForPermission = false;
-            // Launch the scoped picker even if permission is denied: Android grants
-            // access to the exact document/photo selected in the system picker.
+
+            // Even if permission is denied, the system picker can open.
             openDocumentPicker(null);
         }
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data) {
+
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == FILE_CHOOSER_REQUEST) {
+
+        if (requestCode == FILE_REQUEST) {
             Uri[] results = null;
+
             if (resultCode == RESULT_OK && data != null) {
                 if (data.getClipData() != null) {
                     int count = data.getClipData().getItemCount();
                     results = new Uri[count];
+
                     for (int i = 0; i < count; i++) {
-                        results[i] = data.getClipData().getItemAt(i).getUri();
+                        results[i] =
+                                data.getClipData().getItemAt(i).getUri();
                     }
+
                 } else if (data.getData() != null) {
-                    results = new Uri[] { data.getData() };
+                    results = new Uri[]{data.getData()};
                 }
             }
-            finishFileChooser(results);
+
+            finishUpload(results);
+        }
+    }
+
+    private void finishUpload(Uri[] results) {
+        if (uploadCallback != null) {
+            uploadCallback.onReceiveValue(results);
+            uploadCallback = null;
         }
     }
 
@@ -192,11 +222,13 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        finishFileChooser(null);
+        finishUpload(null);
+
         if (webView != null) {
             webView.destroy();
             webView = null;
         }
+
         super.onDestroy();
     }
 }
